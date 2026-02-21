@@ -48,13 +48,21 @@ if ($task) {
 Write-Info "Stopping related processes..."
 Get-Process -Name "streamlit" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Get-Process -Name "python" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name "python3" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Get-Process -Name "py" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+
+# Extra cleanup for any process launched from install directory.
+Get-Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -like "$InstallDir*" } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+
 Start-Sleep -Seconds 2
 Write-Success "Processes stopped."
 
 Write-Info "Removing files..."
 if (Test-Path $InstallDir) {
     $deleted = $false
-    $maxRetries = 3
+    $maxRetries = 2
 
     for ($retry = 1; $retry -le $maxRetries; $retry++) {
         try {
@@ -69,6 +77,7 @@ if (Test-Path $InstallDir) {
         }
     }
 
+    # Final fallback, equivalent to cmd /c rmdir /s /q "%USERPROFILE%\.ocm_trade_strategy"
     if (-not $deleted) {
         Write-Host "   Using fallback removal method..." -ForegroundColor Yellow
         cmd.exe /c "rmdir /s /q `"$InstallDir`""
@@ -86,6 +95,12 @@ if (Test-Path $InstallDir) {
     }
 } else {
     Write-Host "   Install directory not found, skipping." -ForegroundColor Gray
+}
+
+$remaining = Test-Path $InstallDir
+if ($remaining) {
+    Write-Warn "Uninstall did not complete cleanly."
+    exit 1
 }
 
 Write-Host ""
