@@ -1,0 +1,48 @@
+{
+    "symbol": "SPY",
+    "assets": ["1D", "3D", "W", "11D", "17D", "23D", "31D"],
+    "weights": [0.14, 0.14, 0.14, 0.14, 0.14, 0.14, 0.16],
+    "dates": [],
+    "cum_returns_optimal": [],
+    "cum_returns_equal": [],
+    "cum_returns_fixed": [],
+    "benchmark_curve": [],
+    "benchmark_max_dd": 0,
+    "portfolio_result": {
+        "total_return": 0,
+        "ann_return": 0,
+        "ann_vol": 0,
+        "sharpe": 0,
+        "max_drawdown": 0,
+        "n_rebalances": 0
+    },
+    "fixed_result": {
+        "total_return": 0,
+        "ann_return": 0,
+        "sharpe": 0,
+        "max_drawdown": 0
+    },
+    "equal_result": {
+        "total_return": 0,
+        "ann_return": 0,
+        "sharpe": 0,
+        "max_drawdown": 0
+    },
+    "opt_return": 0,
+    "opt_volatility": 0,
+    "opt_sharpe": 0,
+    "efficient_frontier": null,
+    "period_stats": [],
+    "returns_heatmap": {
+        "dates": [],
+        "periods": [],
+        "values": []
+    },
+    "signals": [],
+    "weights_history": [],
+    "rolling_params": {
+        "lookback": 20,
+        "rebalance": 5,
+        "min_lookback": 15
+    }
+}
