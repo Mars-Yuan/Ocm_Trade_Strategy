@@ -519,9 +519,9 @@ function Show-Summary {
     Write-Host "  : $LogDir" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  :" -ForegroundColor Cyan
-    Write-Host "    : $InstallDir\scripts\start_windows.ps1"
-    Write-Host "    : $InstallDir\scripts\stop_windows.ps1"
-    Write-Host "    : $InstallDir\scripts\uninstall_windows.ps1"
+    Write-Host "    : powershell -NoProfile -ExecutionPolicy Bypass -File `"$InstallDir\scripts\start_windows.ps1`""
+    Write-Host "    : powershell -NoProfile -ExecutionPolicy Bypass -File `"$InstallDir\scripts\stop_windows.ps1`""
+    Write-Host "    : powershell -NoProfile -ExecutionPolicy Bypass -File `"$InstallDir\scripts\uninstall_windows.ps1`""
     Write-Host '    : powershell -NoProfile -ExecutionPolicy Bypass -Command "$sha=''3d92896316347029c7695a20aa10d866b34c2c24''; $raw=''https://raw.githubusercontent.com/Mars-Yuan/Ocm_Trade_Strategy/'' + $sha + ''/scripts/upgrade_windows.ps1''; try { $code=(Invoke-WebRequest -Uri $raw -UseBasicParsing -Headers @{''Cache-Control''=''no-cache'';''Pragma''=''no-cache''}).Content; if (-not $code -or $code -notmatch ''OCM Trade Strategy'') { throw ''invalid content'' }; & ([ScriptBlock]::Create($code)) } catch { $zip=Join-Path $env:TEMP (''ocm_upgrade_''+$sha+''.zip''); $dst=Join-Path $env:TEMP (''ocm_upgrade_''+$sha); if(Test-Path $zip){Remove-Item $zip -Force -ErrorAction SilentlyContinue}; if(Test-Path $dst){Remove-Item $dst -Recurse -Force -ErrorAction SilentlyContinue}; Invoke-WebRequest -Uri (''https://codeload.github.com/Mars-Yuan/Ocm_Trade_Strategy/zip/''+$sha) -OutFile $zip -UseBasicParsing; Expand-Archive -Path $zip -DestinationPath $dst -Force; $script=Join-Path $dst (''Ocm_Trade_Strategy-''+$sha+''\scripts\upgrade_windows.ps1''); powershell -NoProfile -ExecutionPolicy Bypass -File $script }"'
     Write-Host ""
     Write-Host "  [OK] " -ForegroundColor Green
