@@ -234,6 +234,11 @@ $code = (Invoke-WebRequest -Uri $url -UseBasicParsing).Content
 & "$env:USERPROFILE\.ocm_trade_strategy\scripts\uninstall_windows.ps1"
 ```
 
+注意：如果卸载脚本提示故障，因为旧版本有后台运行，有的PowerShell执行策略限制，需要先以管理员身份运行PowerShell，然后执行：
+    
+    powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE.ocm_trade_strategy\scripts\stop_windows.ps1"
+
+
 ## 📊 使用说明
 
 ### 仪表板功能
