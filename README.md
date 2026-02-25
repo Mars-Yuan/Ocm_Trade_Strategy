@@ -207,10 +207,12 @@ Ocm_Trade_Strategy/
 # macOS
 ~/.ocm_trade_strategy/scripts/start_mac.sh   # 启动后台服务
 ~/.ocm_trade_strategy/scripts/stop_mac.sh    # 停止后台服务
+```
 
+```powershell
 # Windows (PowerShell)
-& "$env:USERPROFILE\.ocm_trade_strategy\scripts\start_windows.ps1"   # 启动
-& "$env:USERPROFILE\.ocm_trade_strategy\scripts\stop_windows.ps1"    # 停止
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ocm_trade_strategy\scripts\start_windows.ps1"   # 启动
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ocm_trade_strategy\scripts\stop_windows.ps1"    # 停止
 ```
 
 ### 升级脚本
@@ -228,9 +230,11 @@ $code = (Invoke-WebRequest -Uri $url -UseBasicParsing).Content
 ```bash
 # macOS
 ~/.ocm_trade_strategy/scripts/uninstall_mac.sh
+```
 
+```powershell
 # Windows (管理员权限 PowerShell)
-& "$env:USERPROFILE\.ocm_trade_strategy\scripts\uninstall_windows.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ocm_trade_strategy\scripts\uninstall_windows.ps1"
 ```
 
 ## 📊 使用说明
@@ -284,10 +288,25 @@ netstat -ano | findstr :8501  # Windows
 
 # macOS - 停止服务后重新启动
 ~/.ocm_trade_strategy/scripts/stop_mac.sh && ~/.ocm_trade_strategy/scripts/start_mac.sh
+```
 
+```powershell
 # Windows (PowerShell)
-& "$env:USERPROFILE\.ocm_trade_strategy\scripts\stop_windows.ps1"
-& "$env:USERPROFILE\.ocm_trade_strategy\scripts\start_windows.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ocm_trade_strategy\scripts\stop_windows.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ocm_trade_strategy\scripts\start_windows.ps1"
+```
+
+**Q: PowerShell 提示 "running scripts is disabled on this system" （脚本被禁止执行）？**
+
+这是 Windows 默认安全策略限制。最新版脚本已自动处理此问题。如仍遇到，请使用以下命令启动：
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\.ocm_trade_strategy\scripts\start_windows.ps1"
+```
+
+或者一次性放开当前用户的执行策略：
+```powershell
+# 以管理员身份运行 PowerShell
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
 ```
 
 **Q: 无法获取行情数据？**

@@ -435,7 +435,15 @@ objShell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hid
     
     $vbsScript | Out-File -FilePath "$InstallDir\startup_hidden.vbs" -Encoding ASCII
     
-    Write-Success ""
+    # 创建 .bat 启动器作为备用方案
+    $batScript = @"
+@echo off
+cd /d "$InstallDir"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$InstallDir\startup.ps1"
+"@
+    $batScript | Out-File -FilePath "$InstallDir\startup.bat" -Encoding ASCII
+    
+    Write-Success "启动脚本已创建"
 }
 
 function Create-ScheduledTask {
@@ -518,10 +526,10 @@ function Show-Summary {
     Write-Host "  : $InstallDir" -ForegroundColor Cyan
     Write-Host "  : $LogDir" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "  :" -ForegroundColor Cyan
-    Write-Host "    : $InstallDir\scripts\start_windows.ps1"
-    Write-Host "    : $InstallDir\scripts\stop_windows.ps1"
-    Write-Host "    : $InstallDir\scripts\uninstall_windows.ps1"
+    Write-Host "  常用命令:" -ForegroundColor Cyan
+    Write-Host "    启动: powershell -NoProfile -ExecutionPolicy Bypass -File `"$InstallDir\scripts\start_windows.ps1`""
+    Write-Host "    停止: powershell -NoProfile -ExecutionPolicy Bypass -File `"$InstallDir\scripts\stop_windows.ps1`""
+    Write-Host "    卸载: powershell -NoProfile -ExecutionPolicy Bypass -File `"$InstallDir\scripts\uninstall_windows.ps1`""
     Write-Host '    : powershell -NoProfile -ExecutionPolicy Bypass -Command "$sha=''3d92896316347029c7695a20aa10d866b34c2c24''; $raw=''https://raw.githubusercontent.com/Mars-Yuan/Ocm_Trade_Strategy/'' + $sha + ''/scripts/upgrade_windows.ps1''; try { $code=(Invoke-WebRequest -Uri $raw -UseBasicParsing -Headers @{''Cache-Control''=''no-cache'';''Pragma''=''no-cache''}).Content; if (-not $code -or $code -notmatch ''OCM Trade Strategy'') { throw ''invalid content'' }; & ([ScriptBlock]::Create($code)) } catch { $zip=Join-Path $env:TEMP (''ocm_upgrade_''+$sha+''.zip''); $dst=Join-Path $env:TEMP (''ocm_upgrade_''+$sha); if(Test-Path $zip){Remove-Item $zip -Force -ErrorAction SilentlyContinue}; if(Test-Path $dst){Remove-Item $dst -Recurse -Force -ErrorAction SilentlyContinue}; Invoke-WebRequest -Uri (''https://codeload.github.com/Mars-Yuan/Ocm_Trade_Strategy/zip/''+$sha) -OutFile $zip -UseBasicParsing; Expand-Archive -Path $zip -DestinationPath $dst -Force; $script=Join-Path $dst (''Ocm_Trade_Strategy-''+$sha+''\scripts\upgrade_windows.ps1''); powershell -NoProfile -ExecutionPolicy Bypass -File $script }"'
     Write-Host ""
     Write-Host "  [OK] " -ForegroundColor Green
