@@ -374,6 +374,15 @@ function Copy-Files {
         Copy-Item $_.FullName "$InstallDir\scripts\" -Force
     }
     
+    # Re-encode all .ps1 files to UTF-8 with BOM (PowerShell 5.1 compatibility)
+    Get-ChildItem "$InstallDir\scripts\*.ps1" | ForEach-Object {
+        try {
+            $content = [System.IO.File]::ReadAllText($_.FullName, [System.Text.Encoding]::UTF8)
+            $utf8Bom = New-Object System.Text.UTF8Encoding $true
+            [System.IO.File]::WriteAllText($_.FullName, $content, $utf8Bom)
+        } catch {}
+    }
+    
     Write-Success ""
 }
 

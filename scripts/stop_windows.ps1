@@ -1,10 +1,9 @@
 # ============================================================
-# OCM Trade Strategy - Windows 停止脚本
-# 使用方法: 
-#   powershell -NoProfile -ExecutionPolicy Bypass -File stop_windows.ps1
+# OCM Trade Strategy - Windows Stop Script
+# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File stop_windows.ps1
 # ============================================================
 
-# --- 自动处理 ExecutionPolicy ---
+# --- Auto-handle ExecutionPolicy ---
 try {
     $currentPolicy = Get-ExecutionPolicy -Scope Process
 } catch {
@@ -22,7 +21,7 @@ $ErrorActionPreference = "SilentlyContinue"
 
 $TaskName = "OCM_Trade_Strategy"
 
-Write-Host "-> 正在停止 OCM Trade Strategy 服务..." -ForegroundColor Cyan
+Write-Host "-> Stopping OCM Trade Strategy service..." -ForegroundColor Cyan
 
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if ($task -and $task.State -eq "Running") {
@@ -39,4 +38,4 @@ Get-Process | Where-Object {
 
 Start-Sleep -Seconds 1
 
-Write-Host "[OK] 服务已停止" -ForegroundColor Green
+Write-Host "[OK] Service stopped." -ForegroundColor Green
