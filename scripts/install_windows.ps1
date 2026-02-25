@@ -323,10 +323,10 @@ function Show-Summary {
     Write-Host "  : http://localhost:$Port" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  :" -ForegroundColor Cyan
-    Write-Host "    : powershell -NoProfile -ExecutionPolicy Bypass -File `"$InstallDir\scripts\start_windows.ps1`""
-    Write-Host "    : powershell -NoProfile -ExecutionPolicy Bypass -File `"$InstallDir\scripts\stop_windows.ps1`""
-    Write-Host "    : Get-Content `"$LogDir\streamlit.log`" -Tail 50"
-    Write-Host "    : powershell -NoProfile -ExecutionPolicy Bypass -File `"$InstallDir\scripts\uninstall_windows.ps1`""
+    Write-Host "    : $InstallDir\scripts\start_windows.ps1"
+    Write-Host "    : $InstallDir\scripts\stop_windows.ps1"
+    Write-Host "    : Get-Content $LogDir\streamlit.log -Tail 50"
+    Write-Host "    : $InstallDir\scripts\uninstall_windows.ps1"
     Write-Host ""
     Write-Host "  [OK] " -ForegroundColor Green
     Write-Host "  [OK] " -ForegroundColor Green

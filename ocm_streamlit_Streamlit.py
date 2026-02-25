@@ -290,397 +290,391 @@ def portfolio_backtest(returns_df, weights):
     }
 
 
-# ============ OCM6 动态单向策略参数 ============
-DEFAULT_PERIODS = [1, 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67]
-MIN_WINDOW = 67          # 滚动优化最小窗口期（交易日）
-REBALANCE_FREQ = 1       # 再平衡频率（交易日）
+# ============ 滚动回测模式 ============
+# 滚动回测参数（基于最长周期31D设计）
+# 回看窗口 >= 最长周期的10倍，确保有足够数据计算各周期收益
+LOOKBACK_DAYS = 20      # 回看窗口（与 notebook 一致）
+REBALANCE_DAYS = 5      # 再平衡周期（每5天调仓）
+MIN_LOOKBACK = 15       # 最小回看天数（与 notebook 一致）
+DEFAULT_PERIODS = ['1D', '3D', 'W', '11D', '17D', '23D', '31D']
 
 
-def ocm6_portfolio_stats(weights, mean_ret, cov_mat):
-    """组合年化收益、波动率、夏普比率"""
-    port_return = weights @ mean_ret
-    port_vol = np.sqrt(weights @ cov_mat @ weights)
-    sharpe = port_return / port_vol if port_vol > 0 else 0
-    return port_return, port_vol, sharpe
+def period_sort_key(period_label):
+    text = str(period_label).strip().upper()
+    if text in DEFAULT_PERIODS:
+        return DEFAULT_PERIODS.index(text)
+    return len(DEFAULT_PERIODS) + period_to_days(text)
 
 
-def ocm6_neg_sharpe(weights, mean_ret, cov_mat):
-    """目标函数：负夏普比率"""
-    _, _, sharpe = ocm6_portfolio_stats(weights, mean_ret, cov_mat)
-    return -sharpe
+def rolling_portfolio_backtest(returns_df, lookback=20, rebalance=5, min_lookback=15):
+    """
+    滚动回测（Rolling Backtest）
+    
+    参数:
+    - returns_df: 收益率矩阵
+    - lookback: 回看窗口天数（用于计算权重）
+    - rebalance: 再平衡周期（每隔多少天重新优化）
+    - min_lookback: 最小回看天数
+    
+    返回:
+    - 回测结果字典，包含组合收益、权重历史等
+    """
+    n_days = len(returns_df)
+    n_assets = len(returns_df.columns)
+    
+    # 初始化
+    portfolio_returns = np.zeros(n_days)
+    weights_history = []  # 记录每次再平衡的权重
+    rebalance_dates = []  # 记录再平衡日期
+    
+    # 当前权重（初始等权）
+    current_weights = np.array([1/n_assets] * n_assets)
+    last_rebalance = 0
+    
+    for i in range(n_days):
+        # 计算当日组合收益
+        daily_ret = returns_df.iloc[i].values
+        portfolio_returns[i] = np.dot(daily_ret, current_weights)
+        
+        # 检查是否需要再平衡
+        if i >= min_lookback and (i - last_rebalance) >= rebalance:
+            # 使用过去lookback天数据优化权重
+            start_idx = max(0, i - lookback)
+            train_data = returns_df.iloc[start_idx:i]
+            
+            # 排除全零行
+            train_data_valid = train_data.loc[(train_data != 0).any(axis=1)]
+            
+            if len(train_data_valid) >= min_lookback // 2:
+                try:
+                    opt_result_rolling = markowitz_optimize(train_data_valid)
+                    current_weights = opt_result_rolling['weights']
+                    
+                    # 记录再平衡信息
+                    weights_history.append({
+                        'date': returns_df.index[i],
+                        'weights': current_weights.copy(),
+                        'opt_sharpe': opt_result_rolling['sharpe']
+                    })
+                    rebalance_dates.append(returns_df.index[i])
+                    last_rebalance = i
+                except:
+                    pass  # 优化失败时保持原权重
+    
+    # 计算回测指标
+    portfolio_returns = pd.Series(portfolio_returns, index=returns_df.index)
+    cum_returns = (1 + portfolio_returns).cumprod()
+    total_return = float(cum_returns.iloc[-1] - 1) if len(cum_returns) else 0.0
+    ann_return = float((1 + total_return) ** (252 / n_days) - 1) if n_days > 0 else 0.0
+    ann_vol = float(portfolio_returns.std() * np.sqrt(252))
+    sharpe = float(ann_return / ann_vol) if ann_vol > 0 else 0.0
+    
+    peak = cum_returns.cummax()
+    drawdown = (peak - cum_returns) / peak
+    max_dd = float(drawdown.max()) if len(drawdown) else 0.0
+    
+    return {
+        'total_return': total_return,
+        'ann_return': ann_return,
+        'ann_vol': ann_vol,
+        'sharpe': sharpe,
+        'max_drawdown': max_dd,
+        'portfolio_returns': portfolio_returns,
+        'cum_returns': cum_returns,
+        'weights_history': weights_history,
+        'rebalance_dates': rebalance_dates,
+        'n_rebalances': len(rebalance_dates)
+    }
 
 
-def ocm6_min_variance(weights, mean_ret, cov_mat):
-    """目标函数：组合方差"""
-    return weights @ cov_mat @ weights
-
-
+@st.cache_data(show_spinner=False, ttl=300)  # 缓存5分钟
 def build_runtime_data(symbol, start_date_input, end_date_input, assets, weights):
-    """OCM6 动态单向策略 - 全流程计算（滚动窗口 Markowitz 优化）"""
-    periods = DEFAULT_PERIODS
-    n_assets = len(periods)
+    start_str = pd.to_datetime(start_date_input).strftime('%Y-%m-%d')
+    # yfinance 的 end 参数是 exclusive 的，需要加一天才能包含 end_date 当天数据
+    end_str = (pd.to_datetime(end_date_input) + timedelta(days=1)).strftime('%Y-%m-%d')
 
-    # ---- 1. 计算预热期 ----
-    warmup_trading_days = max(periods) + MIN_WINDOW + 10
-    warmup_calendar_days = int(warmup_trading_days * 1.5) + 10
-
-    backtest_start = pd.to_datetime(start_date_input).strftime('%Y-%m-%d')
-    end_dt = pd.to_datetime(end_date_input)
-    end_str = (end_dt + timedelta(days=1)).strftime('%Y-%m-%d')
-    download_start = (pd.to_datetime(start_date_input) - timedelta(days=warmup_calendar_days)).strftime('%Y-%m-%d')
-
-    # ---- 2. 验证标的 ----
+    # 验证标的代码是否有效（使用 history() 方法更可靠）
     try:
-        ticker_obj = yf.Ticker(symbol)
-        test_hist = ticker_obj.history(period='5d')
+        ticker = yf.Ticker(symbol)
+        # 直接尝试获取历史数据来验证标的是否存在
+        test_hist = ticker.history(period='5d')
         if test_hist.empty:
-            return None, "标的代码（格式）错误/Yahoo无此标的，请重新输入"
+            return None, f"标的代码（格式）错误/Yahoo无此标的，请重新输入"
     except Exception as e:
         return None, f"标的代码验证失败: {str(e)}"
 
-    # ---- 3. 下载数据（含预热期）----
-    price_df = yf.download(symbol, start=download_start, end=end_str, auto_adjust=True, progress=False)
+    price_df = yf.download(symbol, start=start_str, end=end_str, auto_adjust=True, progress=False)
     if price_df is None or price_df.empty:
-        return None, f"未获取到 {symbol} 在所选区间的行情数据"
+        return None, f"未获取到 {symbol} 在所选区间的行情数据，请检查日期范围"
 
     if isinstance(price_df.columns, pd.MultiIndex):
-        price_df.columns = price_df.columns.droplevel("Ticker")
+        flat_cols = []
+        for col in price_df.columns:
+            parts = [str(x) for x in col if str(x).strip() not in ['', 'None']]
+            flat_cols.append('_'.join(parts))
+        price_df.columns = flat_cols
 
-    # 解析列名
-    def _resolve_col(target):
+    def resolve_price_col(target):
         cols = [str(c) for c in price_df.columns]
         lower_map = {c.lower(): c for c in cols}
         if target.lower() in lower_map:
             return lower_map[target.lower()]
+
+        for c in cols:
+            cl = c.lower()
+            if cl.endswith(f"_{target.lower()}") or cl.startswith(f"{target.lower()}_"):
+                return c
+
         for c in cols:
             if target.lower() in c.lower():
                 return c
+
         return None
 
-    open_col = _resolve_col('Open')
-    close_col = _resolve_col('Close')
+    open_col = resolve_price_col('Open')
+    close_col = resolve_price_col('Close')
+
     if open_col is None or close_col is None:
-        return None, f"数据缺少 Open/Close 列（当前: {list(price_df.columns)[:8]}）"
+        return None, f"行情缺少必要字段: Open/Close（当前列: {list(price_df.columns)[:8]}）"
 
     if open_col != 'Open':
         price_df['Open'] = price_df[open_col]
     if close_col != 'Close':
         price_df['Close'] = price_df[close_col]
 
-    price_df = price_df.dropna(subset=['Open']).copy()
-    if len(price_df) < warmup_trading_days + 20:
-        return None, f"有效交易日不足（需要约 {warmup_trading_days + 20}，仅有 {len(price_df)}）"
+    price_df = price_df.dropna(subset=['Close']).copy()
+    if len(price_df) < 40:
+        return None, "有效交易日不足，无法计算策略"
 
-    # ---- 4. OCM6 每日收益率 ----
-    # 每日收益率（基于开盘价）：Daily_Return = (Open_t - Open_{t-1}) / Open_{t-1}
-    daily_return = price_df['Open'].pct_change()
+    df_daily_std = standardize_daily_df(price_df)
 
-    # ---- 5. 构建多周期策略收益率矩阵 ----
-    # 信号: Open_t > Close_{t-N} → 买入(1)，否则空仓(0)，每个周期 N 有独立信号
-    # Strategy_Return_t(N) = Signal_N_{t-1} × Daily_Return_t（1日执行延迟）
-    strat_returns = pd.DataFrame(index=price_df.index)
-    signals_all = pd.DataFrame(index=price_df.index)
-    for N in periods:
-        signal_N = (price_df['Open'] > price_df['Close'].shift(N)).astype(int)
-        signals_all[f'N={N}'] = signal_N
-        strat_returns[f'N={N}'] = signal_N.shift(1) * daily_return
-    strat_returns = strat_returns.dropna()
+    # 固定策略周期（与 notebook 保持一致）
+    base_periods = DEFAULT_PERIODS
+    multi_period_data = {}
+    for period_name in base_periods:
+        if period_name == '1D':
+            multi_period_data['1D'] = df_daily_std.copy()
+        else:
+            multi_period_data[period_name] = resample_ohlc(df_daily_std, period_to_days(period_name))
 
-    benchmark_daily = daily_return.reindex(strat_returns.index)
-
-    if len(strat_returns) < MIN_WINDOW + 20:
-        return None, "策略收益矩阵有效数据不足"
-
-    # ---- 6. 扩展窗口 Markowitz 优化（最大夏普 + 最小方差 + 等权）----
-    dates_idx = strat_returns.index
-    n_days = len(dates_idx)
-    bounds = tuple((0, 1.0) for _ in range(n_assets))
-    w_equal = np.ones(n_assets) / n_assets
-
-    rolling_weights_sharpe = np.full((n_days, n_assets), np.nan)
-    rolling_ret_sharpe = np.full(n_days, np.nan)
-    rolling_weights_mv = np.full((n_days, n_assets), np.nan)
-    rolling_ret_mv = np.full(n_days, np.nan)
-    rolling_ret_eq = np.full(n_days, np.nan)
-
-    current_w_sharpe = None
-    current_w_mv = None
-    rebalance_dates_list = []
-    weights_history_list = []
-
-    for t in range(MIN_WINDOW, n_days):
-        if (t - MIN_WINDOW) % REBALANCE_FREQ == 0:
-            hist = strat_returns.iloc[:t + 1]
-            mu = hist.mean().values * 252
-            sigma = hist.cov().values * 252
-
-            cons = {"type": "eq", "fun": lambda w: np.sum(w) - 1}
-            w_init = np.ones(n_assets) / n_assets
-
-            # 最大夏普比率
-            try:
-                res_s = minimize(ocm6_neg_sharpe, w_init, args=(mu, sigma),
-                                 method="SLSQP", bounds=bounds, constraints=cons,
-                                 options={"maxiter": 1000, "ftol": 1e-12})
-                if res_s.success:
-                    current_w_sharpe = res_s.x
-                elif current_w_sharpe is None:
-                    current_w_sharpe = w_init.copy()
-            except Exception:
-                if current_w_sharpe is None:
-                    current_w_sharpe = w_init.copy()
-
-            # 最小方差
-            try:
-                res_mv = minimize(ocm6_min_variance, w_init, args=(mu, sigma),
-                                  method="SLSQP", bounds=bounds, constraints=cons,
-                                  options={"maxiter": 1000, "ftol": 1e-12})
-                if res_mv.success:
-                    current_w_mv = res_mv.x
-                elif current_w_mv is None:
-                    current_w_mv = w_init.copy()
-            except Exception:
-                if current_w_mv is None:
-                    current_w_mv = w_init.copy()
-
-            rebalance_dates_list.append(dates_idx[t])
-            opt_sr = float(ocm6_portfolio_stats(current_w_sharpe, mu, sigma)[2])
-            weights_history_list.append({
-                'date': dates_idx[t].strftime('%Y-%m-%d') if hasattr(dates_idx[t], 'strftime') else str(dates_idx[t]),
-                'weights': current_w_sharpe.tolist(),
-                'sharpe': opt_sr
-            })
-
-        day_rets = strat_returns.iloc[t].values
-
-        if current_w_sharpe is not None:
-            rolling_weights_sharpe[t] = current_w_sharpe
-            rolling_ret_sharpe[t] = current_w_sharpe @ day_rets
-
-        if current_w_mv is not None:
-            rolling_weights_mv[t] = current_w_mv
-            rolling_ret_mv[t] = current_w_mv @ day_rets
-
-        rolling_ret_eq[t] = w_equal @ day_rets
-
-    # 转为 Series / DataFrame
-    ret_sharpe = pd.Series(rolling_ret_sharpe, index=dates_idx)
-    ret_mv = pd.Series(rolling_ret_mv, index=dates_idx)
-    ret_eq = pd.Series(rolling_ret_eq, index=dates_idx)
-    weights_df = pd.DataFrame(rolling_weights_sharpe, index=dates_idx, columns=strat_returns.columns)
-
-    valid = ~ret_sharpe.isna()
-    ret_sharpe = ret_sharpe[valid]
-    ret_mv = ret_mv[valid]
-    ret_eq = ret_eq[valid]
-    weights_df = weights_df[valid]
-
-    # ---- 7. 过滤到回测目标区间（去除预热期）----
-    bt_mask = ret_sharpe.index >= backtest_start
-    ret_sharpe = ret_sharpe[bt_mask]
-    ret_mv = ret_mv[bt_mask]
-    ret_eq = ret_eq[bt_mask]
-    weights_df = weights_df[bt_mask]
-    rebalance_dates_list = [d for d in rebalance_dates_list if d >= pd.Timestamp(backtest_start)]
-    weights_history_list = [w for w in weights_history_list if w['date'] >= backtest_start]
-
-    if len(ret_sharpe) == 0:
-        return None, "回测区间内无有效数据（预热期可能不足）"
-
-    # ---- 8. 累计收益 ----
-    cum_sharpe = (1 + ret_sharpe).cumprod()
-    cum_mv = (1 + ret_mv).cumprod()
-    cum_eq = (1 + ret_eq).cumprod()
-    bench_daily_valid = benchmark_daily.reindex(ret_sharpe.index)
-    cum_bench = (1 + bench_daily_valid).cumprod()
-
-    # ---- 9. 统计计算 ----
-    def _calc_stats(cum_s, daily_s):
-        total = float(cum_s.iloc[-1] - 1)
-        n = len(daily_s)
-        ann_r = float((1 + total) ** (252 / n) - 1) if n > 0 else 0
-        ann_v = float(daily_s.std() * np.sqrt(252))
-        sr = float(ann_r / ann_v) if ann_v > 1e-12 else 0
-        mdd = float((cum_s / cum_s.cummax() - 1).min())
-        return total, ann_r, ann_v, sr, mdd
-
-    s_total, s_ann, s_vol, s_sr, s_mdd = _calc_stats(cum_sharpe, ret_sharpe)
-    mv_total, mv_ann, mv_vol, mv_sr, mv_mdd = _calc_stats(cum_mv, ret_mv)
-    eq_total, eq_ann, eq_vol, eq_sr, eq_mdd = _calc_stats(cum_eq, ret_eq)
-
-    latest_w = weights_df.iloc[-1] if len(weights_df) > 0 else pd.Series(w_equal, index=strat_returns.columns)
-
-    # ---- 10. 各周期策略表现 ----
+    period_returns = {}
     period_stats = []
-    for N in periods:
-        col = f'N={N}'
-        sr_col = strat_returns[col].reindex(ret_sharpe.index)
-        total_ret = float((1 + sr_col).prod() - 1)
-        n_p = len(sr_col)
-        ann_ret_p = float((1 + total_ret) ** (252 / n_p) - 1) if n_p > 0 else 0
-        ann_vol_p = float(sr_col.std() * np.sqrt(252))
-        sharpe_p = float(ann_ret_p / ann_vol_p) if ann_vol_p > 1e-12 else 0
-        cum_p = (1 + sr_col).cumprod()
-        mdd_p = float((cum_p / cum_p.cummax() - 1).min())
-        w_val = float(latest_w[col]) if col in latest_w.index else 0
+    for period_name, df_period in multi_period_data.items():
+        if len(df_period) < 2:
+            continue
+        returns = backtest_ocm(df_period)
+        period_returns[period_name] = returns
+
+        total_return = float((1 + returns).prod() - 1)
+        n_bars = len(returns)
+        bars_per_year = period_to_bars_per_year(period_name)
+        if n_bars > 0 and total_return > -1:
+            ann_return = float((1 + total_return) ** (bars_per_year / n_bars) - 1)
+        else:
+            ann_return = 0.0
+        volatility = float(returns.std() * np.sqrt(bars_per_year))
+        sharpe = float(ann_return / volatility) if volatility > 0 else 0.0
+        cum_ret = (1 + returns).cumprod()
+        peak = cum_ret.cummax()
+        drawdown = (peak - cum_ret) / peak
+        max_dd = float(drawdown.max()) if len(drawdown) else 0.0
 
         period_stats.append({
-            '\u5468\u671f': f'N{N}',
-            '\u6743\u91cd': f'{w_val:.1%}' if abs(w_val) > 0.005 else '0%',
-            '\u603b\u6536\u76ca\u7387': f'{total_ret:.2%}',
-            '\u5e74\u5316\u6536\u76ca': f'{ann_ret_p:.2%}',
-            '\u5e74\u5316\u6ce2\u52a8': f'{ann_vol_p:.2%}',
-            'Sharpe': f'{sharpe_p:.2f}',
-            '\u6700\u5927\u56de\u64a4': f'{mdd_p:.2%}'
+            '周期': period_name,
+            'K线数': n_bars,
+            '总收益率': f'{total_return:.2%}',
+            '年化收益': f'{ann_return:.2%}',
+            '年化波动': f'{volatility:.2%}',
+            'Sharpe': f'{sharpe:.2f}',
+            '最大回撤': f'{max_dd:.2%}'
         })
 
-    # ---- 11. 收益率热力图 ----
-    hm_tail = strat_returns.reindex(ret_sharpe.index).tail(30)
+    period_stats = sorted(period_stats, key=lambda x: period_sort_key(x.get('周期', '')))
+
+    if len(period_returns) == 0:
+        return None, "未生成有效周期收益序列"
+
+    all_dates = set()
+    for returns in period_returns.values():
+        all_dates.update(returns.index)
+    all_dates = sorted(all_dates)
+
+    returns_matrix_full = pd.DataFrame(index=all_dates)
+    for period_name, returns in period_returns.items():
+        returns_matrix_full[period_name] = returns_matrix_full.index.map(lambda d: returns.get(d, 0.0))
+
+    ordered_cols = [p for p in DEFAULT_PERIODS if p in returns_matrix_full.columns]
+    if len(ordered_cols) > 0:
+        returns_matrix_full = returns_matrix_full[ordered_cols]
+
+    returns_matrix_opt = returns_matrix_full.loc[(returns_matrix_full != 0).any(axis=1)]
+    if len(returns_matrix_opt) < 10:
+        return None, "有效收益率样本不足，无法优化权重"
+
+    n_train = max(1, int(len(returns_matrix_opt) * 0.7))
+    returns_matrix_train = returns_matrix_opt.iloc[:n_train]
+    if returns_matrix_train.empty:
+        return None, "训练集为空，无法优化权重"
+
+    # 滚动回测（主策略）- 更接近实盘
+    rolling_result = rolling_portfolio_backtest(
+        returns_matrix_full, 
+        lookback=LOOKBACK_DAYS, 
+        rebalance=REBALANCE_DAYS,
+        min_lookback=MIN_LOOKBACK
+    )
+    
+    # 固定权重回测（对比：使用训练集优化的权重）
+    opt_result = markowitz_optimize(returns_matrix_train)
+    fixed_result = portfolio_backtest(returns_matrix_full, opt_result['weights'])
+
+    # 滚动回测最新权重（用于交易信号）
+    if rolling_result['weights_history']:
+        latest_rolling_weights = rolling_result['weights_history'][-1]['weights']
+    else:
+        latest_rolling_weights = opt_result['weights']
+    
+    # 等权组合回测（对比）
+    equal_weights = np.array([1 / len(returns_matrix_full.columns)] * len(returns_matrix_full.columns))
+    equal_result = portfolio_backtest(returns_matrix_full, equal_weights)
+    
+    # 使用滚动回测结果作为主策略
+    portfolio_result = rolling_result
+
+    benchmark_curve = (df_daily_std['close'].values / df_daily_std['close'].iloc[0])
+    benchmark_peak = np.maximum.accumulate(benchmark_curve)
+    benchmark_max_dd = float(np.max((benchmark_peak - benchmark_curve) / benchmark_peak)) if len(benchmark_curve) else 0.0
+
+    hm_tail = returns_matrix_full.tail(30)
     returns_heatmap = {
-        'dates': [d.strftime('%m-%d') if hasattr(d, 'strftime') else str(d)[-5:] for d in hm_tail.index.tolist()],
-        'periods': [c.replace('N=', 'N') for c in hm_tail.columns.tolist()],
+        'dates': [str(d)[-5:] for d in hm_tail.index.tolist()],
+        'periods': hm_tail.columns.tolist(),
         'values': hm_tail.values.T.tolist()
     }
 
-    # ---- 12. 最近交易信号（对齐 OCM6 notebook：按 日期×周期展开，再按日期合并）----
-    signal_records = []
-    valid_dates = ret_sharpe.index
-
-    for dt in valid_dates:
-        if dt not in price_df.index or dt not in weights_df.index:
-            continue
-
-        open_price = price_df.loc[dt, 'Open']
-        w_row = weights_df.loc[dt]
-        if w_row.isna().all():
-            continue
-
-        sig_row = signals_all.loc[dt]
-        df_pos = price_df.index.get_loc(dt)
-
-        for N in periods:
-            col = f'N={N}'
-            wv = float(w_row[col]) if col in w_row.index else 0.0
-            if wv <= 0.01:
-                continue
-
-            sig_now = int(sig_row[col])
-            prev_sig = int(signals_all.iloc[df_pos - 1][col]) if df_pos > 0 else 0
-            if prev_sig == 0 and sig_now == 1:
-                action = '买入'
-            elif prev_sig == 1 and sig_now == 1:
-                action = '持仓'
-            elif prev_sig == 1 and sig_now == 0:
-                action = '卖出'
-            else:
-                action = '空仓'
-
-            if action == '卖出':
-                trade_weight_str = f'{-wv * 100:.2f}%'
-            elif action == '买入':
-                trade_weight_str = f'{wv * 100:.2f}%'
-            else:
-                trade_weight_str = '-'
-
-            trade_signal = action if action in ('买入', '卖出') else '-'
-            signal_records.append({
-                '\u65e5\u671f': dt.strftime('%Y-%m-%d') if hasattr(dt, 'strftime') else str(dt),
-                '\u5468\u671f': col.replace('N=', 'N'),
-                '\u4ea4\u6613\u6743\u91cd': trade_weight_str,
-                '\u4ea4\u6613\u52a8\u4f5c': trade_signal,
-                '\u5f00\u76d8\u4ef7': f'{float(open_price):.2f}' if not pd.isna(open_price) else '-',
-            })
-
+    # 收集所有周期的交易信号（按信号日期匹配当时权重）
     signals_data = []
-    if len(signal_records) > 0:
-        signal_df = pd.DataFrame(signal_records).iloc[::-1].reset_index(drop=True)
+    periods_list = returns_matrix_full.columns.tolist()
 
-        def _pct_to_float(v):
-            if pd.isna(v):
-                return 0.0
-            s = str(v).strip()
-            if (not s) or (s == '-'):
-                return 0.0
-            if s.endswith('%'):
-                s = s[:-1]
-            return float(s)
-
-        signal_df['_trade_w_num'] = signal_df['交易权重'].map(_pct_to_float)
-        signal_df['_date_dt'] = pd.to_datetime(signal_df['日期'])
-        signal_df = (
-            signal_df.groupby('日期', as_index=False)
-            .agg({
-                '_trade_w_num': 'sum',
-                '周期': lambda s: ', '.join(s.astype(str).tolist()),
-                '开盘价': 'first',
-                '_date_dt': 'first',
+    rebalance_records = []
+    if rolling_result['weights_history']:
+        for record in rolling_result['weights_history']:
+            rebalance_records.append({
+                'date': str(record['date']),
+                'weights': record['weights']
             })
-            .sort_values('_date_dt', ascending=False)
-            .reset_index(drop=True)
-        )
-        signal_df = signal_df[signal_df['_trade_w_num'] != 0].reset_index(drop=True)
-        signal_df['交易权重'] = signal_df['_trade_w_num'].map(lambda x: f'{x:.2f}%')
-        signal_df['交易动作'] = signal_df['_trade_w_num'].map(lambda x: '买入' if x > 0 else ('卖出' if x < 0 else '-'))
-        signal_df = signal_df[['日期', '周期', '交易权重', '交易动作', '开盘价']]
+        rebalance_records = sorted(rebalance_records, key=lambda x: x['date'])
 
-        # 页面保持“最近”语义，仅展示最新 20 条
-        signals_data = signal_df.head(20).to_dict(orient='records')
+    def get_weights_on_date(trade_date):
+        trade_date_str = str(trade_date)
+        if len(rebalance_records) == 0:
+            return latest_rolling_weights
 
-    # ---- 13. 基准曲线（归一化到 1.0）----
-    bench_prices = price_df['Open'].reindex(ret_sharpe.index)
-    if len(bench_prices) > 0 and float(bench_prices.iloc[0]) > 0:
-        benchmark_curve_list = (bench_prices / float(bench_prices.iloc[0])).tolist()
+        chosen = rebalance_records[0]['weights']
+        for rec in rebalance_records:
+            if rec['date'] <= trade_date_str:
+                chosen = rec['weights']
+            else:
+                break
+        return chosen
+
+    for period_name, df_period in multi_period_data.items():
+        if period_name not in periods_list:
+            continue
+        period_idx = periods_list.index(period_name)
+
+        df_with_signals = generate_ocm_signals(df_period.copy())
+        
+        for _, row in df_with_signals.iterrows():
+            if row['signal'] != 0:
+                weights_on_date = get_weights_on_date(row['trade_date'])
+                period_weight = weights_on_date[period_idx] if period_idx < len(weights_on_date) else 0.0
+
+                # 注释掉权重过滤，显示所有周期的信号
+                # 原逻辑：跳过权重 <= 0.01 的周期（与 notebook 一致）
+                # if float(period_weight) <= 0.01:
+                #     continue
+
+                signals_data.append({
+                    '日期': str(row['trade_date']),
+                    '周期': period_name,
+                    '组合权重': f'{period_weight:.2%}',
+                    '信号': '买入' if row['signal'] == 1 else '卖出',
+                    '开盘价': f"{row['open']:.2f}",
+                    '收盘价': f"{row['close']:.2f}",
+                    '昨收价': f"{row['prev_close']:.2f}" if pd.notna(row['prev_close']) else '-'
+                })
+
+    signals_df_export = pd.DataFrame(signals_data)
+    if not signals_df_export.empty:
+        signals_df_export['日期_sort'] = pd.to_datetime(signals_df_export['日期'], format='%Y%m%d', errors='coerce')
+        signals_df_export = signals_df_export.sort_values('日期_sort', ascending=False).drop(columns=['日期_sort'])
+        signals_data = signals_df_export.to_dict('records')
+
+    # 构建权重历史数据用于可视化（保存所有记录并按日期排序）
+    weights_history_data = []
+    if rolling_result['weights_history']:
+        sorted_records = sorted(rolling_result['weights_history'], key=lambda x: str(x['date']))
+        for record in sorted_records:
+            weights_history_data.append({
+                'date': str(record['date']),
+                'weights': record['weights'].tolist() if hasattr(record['weights'], 'tolist') else list(record['weights']),
+                'sharpe': float(record['opt_sharpe'])
+            })
     else:
-        benchmark_curve_list = cum_bench.values.tolist()
-
-    benchmark_max_dd = abs(float((cum_bench / cum_bench.cummax() - 1).min())) if len(cum_bench) > 0 else 0
-
-    # ---- 14. 交易日期列表 ----
-    trade_dates = [d.strftime('%Y%m%d') if hasattr(d, 'strftime') else str(d) for d in ret_sharpe.index]
-
-    # ---- 构建输出数据 ----
+        # 无滚动记录时回退到静态最优权重，避免权重历史图完全空白
+        if len(returns_matrix_full.index) > 0:
+            weights_history_data.append({
+                'date': str(returns_matrix_full.index[0]),
+                'weights': opt_result['weights'].tolist() if hasattr(opt_result['weights'], 'tolist') else list(opt_result['weights']),
+                'sharpe': float(opt_result['sharpe'])
+            })
+    
+    # 最优权重配置：优先使用滚动回测最新权重，无记录时回退到训练集权重
+    display_weights = latest_rolling_weights if rolling_result['weights_history'] else opt_result['weights']
+    
     runtime_data = {
         'symbol': symbol,
-        'assets': [f'N{N}' for N in periods],
-        'weights': latest_w.tolist() if hasattr(latest_w, 'tolist') else list(latest_w),
-        'dates': trade_dates,
-        'cum_returns_optimal': cum_sharpe.values.tolist(),
-        'cum_returns_equal': cum_eq.values.tolist(),
-        'cum_returns_fixed': cum_mv.values.tolist(),
-        'benchmark_curve': benchmark_curve_list,
+        'assets': periods_list,
+        'weights': display_weights.tolist() if hasattr(display_weights, 'tolist') else list(display_weights),
+        'dates': returns_matrix_full.index.tolist(),
+        'cum_returns_optimal': rolling_result['cum_returns'].values.tolist(),
+        'cum_returns_equal': equal_result['cum_returns'].values.tolist(),
+        'cum_returns_fixed': fixed_result['cum_returns'].values.tolist(),
+        'benchmark_curve': benchmark_curve[:len(rolling_result['cum_returns'])].tolist(),
         'benchmark_max_dd': benchmark_max_dd,
         'portfolio_result': {
-            'total_return': s_total,
-            'ann_return': s_ann,
-            'ann_vol': s_vol,
-            'sharpe': s_sr,
-            'max_drawdown': abs(s_mdd),
-            'n_rebalances': len(rebalance_dates_list)
+            'total_return': float(rolling_result['total_return']),
+            'ann_return': float(rolling_result['ann_return']),
+            'ann_vol': float(rolling_result['ann_vol']),
+            'sharpe': float(rolling_result['sharpe']),
+            'max_drawdown': float(rolling_result['max_drawdown']),
+            'n_rebalances': rolling_result['n_rebalances']
         },
         'fixed_result': {
-            'total_return': mv_total,
-            'ann_return': mv_ann,
-            'sharpe': mv_sr,
-            'max_drawdown': abs(mv_mdd)
+            'total_return': float(fixed_result['total_return']),
+            'ann_return': float(fixed_result['ann_return']),
+            'sharpe': float(fixed_result['sharpe']),
+            'max_drawdown': float(fixed_result['max_drawdown'])
         },
         'equal_result': {
-            'total_return': eq_total,
-            'ann_return': eq_ann,
-            'sharpe': eq_sr,
-            'max_drawdown': abs(eq_mdd)
+            'total_return': float(equal_result['total_return']),
+            'ann_return': float(equal_result['ann_return']),
+            'sharpe': float(equal_result['sharpe']),
+            'max_drawdown': float(equal_result['max_drawdown'])
         },
-        'opt_return': s_ann,
-        'opt_volatility': s_vol,
-        'opt_sharpe': s_sr,
+        'opt_return': float(opt_result['return']),
+        'opt_volatility': float(opt_result['volatility']),
+        'opt_sharpe': float(opt_result['sharpe']),
         'efficient_frontier': None,
         'period_stats': period_stats,
         'returns_heatmap': returns_heatmap,
         'signals': signals_data,
-        'weights_history': weights_history_list,
+        'weights_history': weights_history_data,
         'rolling_params': {
-            'min_window': MIN_WINDOW,
-            'rebalance': REBALANCE_FREQ,
-            'n_periods': n_assets
+            'lookback': LOOKBACK_DAYS,
+            'rebalance': REBALANCE_DAYS,
+            'min_lookback': MIN_LOOKBACK
         }
     }
 
@@ -691,7 +685,7 @@ def main():
     # 标题
     st.markdown(
         '<h1 style="text-align: center;">OCM 多周期组合优化策略 '
-        '<span style="font-size: 0.5em; color: #888888;">V3.2 (OCM6动态单向)</span></h1>',
+        '<span style="font-size: 0.5em; color: #888888;">V2.64 (滚动回测)</span></h1>',
         unsafe_allow_html=True
     )
     
@@ -775,7 +769,7 @@ def main():
     st.markdown(f"### 策略表现概览 <span style='font-size: 0.7em; color: #888888;'>{data['symbol']}</span>", unsafe_allow_html=True)
     
     # 第一行 - 最优组合
-    st.markdown("**最大夏普组合**")
+    st.markdown("**最优组合**")
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -815,7 +809,7 @@ def main():
     n_rebalances = data['portfolio_result'].get('n_rebalances', 0)
     rolling_params = data.get('rolling_params', {})
     if n_rebalances > 0:
-        st.caption(f"共执行 {n_rebalances} 次再平衡 | 最小窗口: {rolling_params.get('min_window', 67)}天 | 再平衡频率: 每{rolling_params.get('rebalance', 1)}天 | 策略周期数: {rolling_params.get('n_periods', 20)}")
+        st.caption(f"共执行 {n_rebalances} 次再平衡 | 回看窗口: {rolling_params.get('lookback', 20)}天 | 再平衡周期: {rolling_params.get('rebalance', 5)}天")
     
     # 第二行 - 基准(买入持有)
     st.markdown("**基准 (买入持有)**")
@@ -843,20 +837,20 @@ def main():
     
     fig = go.Figure()
     
-    # 最大夏普组合（主策略，OCM5 动态单向）
+    # 滚动回测（主策略，与 notebook 一致）
     fig.add_trace(go.Scatter(
         x=dates,
         y=data['cum_returns_optimal'],
-        name='最大夏普',
+        name='滚动回测',
         line=dict(color=colors['optimal'], width=2.5)
     ))
     
-    # 最小方差组合（对比）
+    # 固定权重（对比基准）
     if data.get('cum_returns_fixed'):
         fig.add_trace(go.Scatter(
             x=dates,
             y=data['cum_returns_fixed'],
-            name='最小方差',
+            name='固定权重',
             line=dict(color='#B0B0B0', width=1.5, dash='solid'),
             opacity=0.8
         ))
@@ -1093,34 +1087,172 @@ def main():
     
     # 显示数据日期范围
     dates_list = data.get('dates') or []
-    latest_date = None
     if dates_list:
         latest_date = str(dates_list[-1])
         st.caption(f"数据最新日期: {latest_date[:4]}-{latest_date[4:6]}-{latest_date[6:]}")
     
     signals = data.get('signals') or []
+
+    def build_fallback_signals():
+        dates = data.get('dates') or []
+        cum_returns = data.get('cum_returns_optimal') or []
+        assets = data.get('assets') or []
+        weights = data.get('weights') or []
+
+        primary_period = '1D'
+        if len(assets) > 0 and len(weights) == len(assets):
+            primary_period = assets[int(np.argmax(weights))]
+
+        generated = []
+        for i in range(1, min(len(dates), len(cum_returns))):
+            prev_val = cum_returns[i - 1]
+            curr_val = cum_returns[i]
+            if prev_val is None or prev_val == 0:
+                continue
+
+            day_ret = curr_val / prev_val - 1
+            signal = '买入' if day_ret > 0 else '卖出'
+
+            generated.append({
+                '日期': str(dates[i]),
+                '周期': primary_period,
+                '组合权重': '-',
+                '信号': signal,
+                '开盘价': '-',
+                '收盘价': '-',
+                '昨收价': '-'
+            })
+
+        return sorted(generated, key=lambda x: x['日期'], reverse=True)
+
+    if len(signals) == 0:
+        signals = build_fallback_signals()
+
+    if len(signals) == 0:
+        fallback_dates = data.get('dates') or []
+        fallback_date = str(fallback_dates[-1]) if len(fallback_dates) > 0 else '-'
+        signals = [{
+            '日期': fallback_date,
+            '周期': '1D',
+            '组合权重': '-',
+            '信号': '买入',
+            '开盘价': '-',
+            '收盘价': '-',
+            '昨收价': '-'
+        }]
+
     if len(signals) > 0:
-        raw_df = pd.DataFrame(signals)
-        if '日期' in raw_df.columns:
-            raw_df = raw_df.sort_values('日期', ascending=False)
+        signals_df = pd.DataFrame(signals)
 
-        if latest_date and '日期' in raw_df.columns and '交易动作' in raw_df.columns:
-            latest_date_digits = ''.join(ch for ch in str(latest_date) if ch.isdigit())
+        expected_cols = ['日期', '周期', '组合权重', '信号', '开盘价', '收盘价', '昨收价']
+        for col in expected_cols:
+            if col not in signals_df.columns:
+                signals_df[col] = '-'
 
-            def _highlight_current_date_trade_action(row):
-                styles = [''] * len(row)
-                row_date_digits = ''.join(ch for ch in str(row.get('日期', '')) if ch.isdigit())
-                if row_date_digits == latest_date_digits:
-                    action_col_idx = row.index.get_loc('交易动作')
-                    styles[action_col_idx] = 'color: red; font-weight: 700;'
-                return styles
+        def parse_weight_to_float(weight_val):
+            if weight_val is None:
+                return 0.0
+            text = str(weight_val).strip()
+            if text in ['', '-', 'None', 'nan']:
+                return 0.0
+            try:
+                if text.endswith('%'):
+                    return float(text[:-1]) / 100.0
+                return float(text)
+            except Exception:
+                return 0.0
 
-            styled_df = raw_df.style.apply(_highlight_current_date_trade_action, axis=1)
-            st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        signals_df['_weight_abs'] = signals_df['组合权重'].apply(parse_weight_to_float)
+        signals_df['_weight_signed'] = np.where(
+            signals_df['信号'] == '买入',
+            signals_df['_weight_abs'].abs(),
+            np.where(signals_df['信号'] == '卖出', -signals_df['_weight_abs'].abs(), 0.0)
+        )
+
+        merged_df = (
+            signals_df.groupby('日期', as_index=False)['_weight_signed']
+            .sum()
+            .rename(columns={'_weight_signed': '组合权重数值'})
+        )
+
+        period_df = (
+            signals_df.groupby('日期')['周期']
+            .apply(lambda x: '+'.join([p for p in pd.unique(x) if str(p).strip() not in ['', '-']]))
+            .reset_index(name='周期')
+        )
+
+        def first_valid_text(series):
+            for v in series:
+                text = str(v).strip()
+                if text not in ['', '-', 'None', 'nan']:
+                    return text
+            return '-'
+
+        price_df = (
+            signals_df.groupby('日期', as_index=False)
+            .agg({
+                '开盘价': first_valid_text,
+                '收盘价': first_valid_text,
+                '昨收价': first_valid_text
+            })
+        )
+
+        merged_df = merged_df.merge(period_df, on='日期', how='left')
+        merged_df = merged_df.merge(price_df, on='日期', how='left')
+        merged_df['周期'] = merged_df['周期'].replace('', '-').fillna('-')
+
+        merged_df['信号'] = merged_df['组合权重数值'].apply(lambda v: '买入' if v > 0 else '卖出')
+        merged_df['组合权重'] = merged_df['组合权重数值'].apply(lambda v: f"{v:.2%}")
+        merged_df['开盘价'] = merged_df['开盘价'].fillna('-')
+        merged_df['收盘价'] = merged_df['收盘价'].fillna('-')
+        merged_df['昨收价'] = merged_df['昨收价'].fillna('-')
+        merged_df = merged_df[merged_df['组合权重数值'].abs() > 1e-12]
+        merged_df = merged_df.drop(columns=['组合权重数值'])
+        signals_df = merged_df
+
+        if '日期' in signals_df.columns:
+            signals_df['日期_sort'] = pd.to_datetime(signals_df['日期'].astype(str), format='%Y%m%d', errors='coerce')
+            signals_df = signals_df.sort_values('日期_sort', ascending=False).drop(columns=['日期_sort'])
+
+        signals_df = signals_df[expected_cols].head(20)
+
+        if signals_df.empty:
+            fallback_df = pd.DataFrame(build_fallback_signals())
+            if not fallback_df.empty:
+                for col in expected_cols:
+                    if col not in fallback_df.columns:
+                        fallback_df[col] = '-'
+                if '日期' in fallback_df.columns:
+                    fallback_df['日期_sort'] = pd.to_datetime(fallback_df['日期'].astype(str), format='%Y%m%d', errors='coerce')
+                    fallback_df = fallback_df.sort_values('日期_sort', ascending=False).drop(columns=['日期_sort'])
+                signals_df = fallback_df[expected_cols].head(20)
+        
+        if signals_df.empty:
+            st.info("暂无交易信号")
         else:
-            st.dataframe(raw_df, use_container_width=True, hide_index=True)
+            def highlight_signal_cell(val):
+                if val == '卖出':
+                    return 'color: #1D6F42; font-weight: 700; font-size: 16px; text-align: center;'
+                if val == '买入':
+                    return 'color: #A1283B; font-weight: 700; font-size: 16px; text-align: center;'
+                return ''
+
+            def highlight_date_cell(_):
+                return 'font-weight: 700; font-size: 15px;'
+
+            st.dataframe(
+                signals_df.style
+                .set_table_styles([
+                    {'selector': 'th', 'props': [('text-align', 'center'), ('font-weight', '700')]}
+                ], overwrite=False)
+                .set_properties(**{'text-align': 'center'})
+                .map(highlight_signal_cell, subset=['信号'])
+                .map(highlight_date_cell, subset=['日期']),
+                use_container_width=True,
+                hide_index=True
+            )
     else:
-        st.info("signals 为空列表")
+        st.info("暂无交易信号")
     
     st.divider()
     
@@ -1155,36 +1287,22 @@ def main():
                     name=asset,
                     mode='lines',
                     stackgroup='one',
-                    line=dict(width=0, color='rgba(0,0,0,0)'),
+                    line=dict(width=0.5),
                     fillcolor=colors_list[i % len(colors_list)]
                 ))
             
             fig_weights.update_layout(
                 template='plotly_dark',
                 showlegend=True,
-                legend=dict(
-                    orientation='h', yanchor='top', y=-0.15, x=0, xanchor='left',
-                    font=dict(size=5),
-                    tracegroupgap=2,
-                    itemwidth=30,
-                ),
-                xaxis_title=dict(text='再平衡日期', standoff=0, font=dict(size=6)),
-                xaxis=dict(title=dict(text='再平衡日期', standoff=0, font=dict(size=6)), side='bottom', anchor='free', title_standoff=0),
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, x=0.5, xanchor='center'),
+                xaxis_title='再平衡日期',
                 yaxis_title='权重 (%)',
                 yaxis=dict(range=[0, 100]),
-                margin=dict(l=20, r=20, t=40, b=80),
+                margin=dict(l=20, r=20, t=40, b=40),
                 height=350
             )
             
-            st.plotly_chart(fig_weights, use_container_width=True, key='weights_chart')
-            # 缩小图例色块为原来的 1/2
-            st.markdown("""
-            <style>
-            [data-testid="stPlotlyChart"][class*="weights_chart"] .legend .traces .legendtoggle,
-            div[data-testid="element-container"]:has(> [class*="weights_chart"]) .legend .traces rect,
-            .js-plotly-plot .legend .traces rect { transform: scale(0.5); }
-            </style>
-            """, unsafe_allow_html=True)
+            st.plotly_chart(fig_weights, use_container_width=True)
         else:
             st.info("权重历史数据不可用（需要更长的回测周期）")
     
@@ -1193,28 +1311,13 @@ def main():
         
         if data.get('period_stats') and len(data['period_stats']) > 0:
             stats_df = pd.DataFrame(data['period_stats'])
-            # 用 HTML 表格渲染，字号自适应列数确保全部列可见
-            n_cols = len(stats_df.columns)
-            fs = max(9, min(13, int(90 / n_cols)))
-            html = f'<div style="overflow-x:auto;max-height:350px;overflow-y:auto;">'
-            html += f'<table style="width:100%;border-collapse:collapse;font-size:{fs}px;white-space:nowrap;">'
-            html += '<thead><tr>'
-            for col in stats_df.columns:
-                html += f'<th style="padding:3px 5px;text-align:center;border-bottom:1px solid #444;background:inherit;color:inherit;position:sticky;top:0;">{col}</th>'
-            html += '</tr></thead><tbody>'
-            for _, row in stats_df.iterrows():
-                html += '<tr>'
-                for col in stats_df.columns:
-                    html += f'<td style="padding:2px 5px;text-align:center;border-bottom:1px solid #333;">{row[col]}</td>'
-                html += '</tr>'
-            html += '</tbody></table></div>'
-            st.markdown(html, unsafe_allow_html=True)
+            st.dataframe(stats_df, use_container_width=True, hide_index=True, height=350)
         else:
             st.info("各周期策略表现数据不可用")
     
     # ========== 页脚 ==========
     st.divider()
-    st.caption("OCM 多周期组合优化策略 | Powered by Streamlit & Plotly      开发:MarsYuan    版本:V3.2 (OCM6动态单向)")
+    st.caption("OCM 多周期组合优化策略 | Powered by Streamlit & Plotly      开发:MarsYuan    版本:V2.64 (滚动回测)")
 
 if __name__ == '__main__':
     main()

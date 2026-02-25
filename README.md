@@ -1,7 +1,7 @@
-# OCM Trade Strategy Dashboard (V3.2)
+# OCM Trade Strategy Dashboard (v2.61)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-V3.2-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-v2.61-orange" alt="Version">
   <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python Version">
   <img src="https://img.shields.io/badge/streamlit-1.28%2B-red" alt="Streamlit Version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
@@ -9,16 +9,15 @@
 
 ## 📖 项目简介
 
-OCM Trade Strategy Dashboard 是一个基于 **Markowitz 投资组合优化理论** 的 OCM5 动态单向多周期交易策略可视化仪表板。该系统通过 Streamlit 构建，采用扩展窗口 Markowitz 优化，提供实时的策略表现监控、收益曲线分析和交易信号展示。
+OCM Trade Strategy Dashboard 是一个基于 **Markowitz 投资组合优化理论** 的多周期交易策略可视化仪表板。该系统通过 Streamlit 构建，提供实时的策略表现监控、收益曲线分析和交易信号展示。
 
 ### 核心功能
 
-- 🎯 **OCM6 动态单向策略**: 支持 20 个周期（1, 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67）
-- 📊 **扩展窗口 Markowitz 优化**: 最大夏普 + 最小方差 + 等权三组合对比
-- 📈 **实时数据更新**: 通过 Yahoo Finance 获取最新行情数据（美东时区）
-- 🔔 **交易信号展示**: 基于 Open > Prev_Close 的单向突破信号，权重合并展示
+- 🎯 **多周期策略回测**: 支持 1D、3D、W、11D、17D、23D、31D 等多个交易周期
+- 📊 **Markowitz 组合优化**: 基于现代投资组合理论自动计算最优权重
+- 📈 **实时数据更新**: 通过 Yahoo Finance 获取最新行情数据
+- 🔔 **交易信号展示**: 直观显示各周期的买卖信号
 - 📉 **风险指标监控**: Sharpe Ratio、最大回撤、年化波动率等
-- 📐 **有效前沿可视化**: 子弹头形态有效前沿图，标注最大夏普 & 最小方差点
 
 ## 🖥️ 系统要求
 
@@ -326,25 +325,7 @@ pip install -r requirements.txt
 
 ## 📝 更新日志
 
-### V3.2 (当前版本)
-- 升级为 **OCM6 动态单向策略**架构
-- 优化策略周期参数与权重分配算法
-- 改进界面显示与用户体验
-- 提升数据获取稳定性与错误处理
-
-### V3.1
-- 全面升级为 **OCM5 动态单向策略**架构
-- 策略周期扩展至 20 个（含质数序列：1, 2, 3, 5, 7, 11, …, 61, 67）
-- 采用**扩展窗口 Markowitz 优化**（Expanding Window），替代滚动窗口
-- 新增三组合对比：最大夏普、最小方差、等权组合
-- 信号逻辑统一为 Open > Prev_Close 单向突破
-- 新增有效前沿（Efficient Frontier）子弹头曲线可视化
-- 再平衡频率默认每 1 个交易日，最小窗口 67 天
-- 数据时区采用美东时间（America/New_York），确保与 Yahoo Finance 一致
-- 交易信号明细支持同日多周期权重合并显示
-- 各周期策略表现使用自适应字号 HTML 表格渲染
-
-### v2.6
+### v2.6 (当前版本)
 - 新增「权重随时间变化图」（堆叠面积图），替代原有的「各周期收益率热力图」
 - 权重图显示全部再平衡记录（从开始日期到结束日期的所有记录）
 - 优化滚动回测参数：LOOKBACK_DAYS=20, REBALANCE_DAYS=5, MIN_LOOKBACK=15
