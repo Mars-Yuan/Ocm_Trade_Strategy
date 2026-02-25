@@ -1,7 +1,7 @@
-# OCM Trade Strategy Dashboard (v2.61)
+# OCM Trade Strategy Dashboard (v2.64)
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-v2.61-orange" alt="Version">
+  <img src="https://img.shields.io/badge/version-v2.64-orange" alt="Version">
   <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python Version">
   <img src="https://img.shields.io/badge/streamlit-1.28%2B-red" alt="Streamlit Version">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
